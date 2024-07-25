@@ -1,0 +1,3 @@
+database_url: "postgres://user:password@postgres:5432/mydb?sslmode=disable"
+kafka_brokers:
+  - "kafka1:19092"
