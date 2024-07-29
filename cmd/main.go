@@ -43,6 +43,10 @@ func main() {
 	router := mux.NewRouter()
 	router.HandleFunc("/messages", handlers.CreateMessageHandler(db, kafkaProducer)).Methods("POST")
 	router.HandleFunc("/stats", handlers.GetStatsHandler(db)).Methods("GET")
+	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "./static/index.html")
+	})
 
 	log.Println("Server is running on port 8080")
 	if err := http.ListenAndServe(":8080", router); err != nil {

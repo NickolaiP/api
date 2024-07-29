@@ -1,4 +1,4 @@
-module new_api
+module github.com/NickolaiP/api
 
 go 1.22
 
