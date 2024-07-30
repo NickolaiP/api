@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -8,57 +9,32 @@ import (
 )
 
 type Message struct {
-	ID        int64     `json:"id"`
-	Content   string    `json:"content"`
-	Processed bool      `json:"processed"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        int
+	Content   string
+	Processed bool
+	CreatedAt time.Time
 }
 
-type MessageRepository struct {
+type MessageRepository interface {
+	Save(ctx context.Context, msg Message) error
+	GetProcessedCount(ctx context.Context) (int, error)
+}
+
+type PostgresMessageRepository struct {
 	db *sql.DB
 }
 
-func NewPostgresDB(url string) (*sql.DB, error) {
-	db, err := sql.Open("postgres", url)
-	if err != nil {
-		return nil, err
-	}
-	if err := db.Ping(); err != nil {
-		return nil, err
-	}
-	return db, nil
+func NewMessageRepository(db *sql.DB) MessageRepository {
+	return &PostgresMessageRepository{db: db}
 }
 
-func NewMessageRepository(db *sql.DB) *MessageRepository {
-	return &MessageRepository{db: db}
+func (r *PostgresMessageRepository) Save(ctx context.Context, msg Message) error {
+	_, err := r.db.ExecContext(ctx, "INSERT INTO messages (content, processed) VALUES ($1, $2)", msg.Content, msg.Processed)
+	return err
 }
 
-func (r *MessageRepository) Create(msg *Message) error {
-	query := `INSERT INTO messages (content, processed, created_at) VALUES ($1, $2, $3) RETURNING id`
-	return r.db.QueryRow(query, msg.Content, msg.Processed, time.Now()).Scan(&msg.ID)
-}
-
-func (r *MessageRepository) GetStats() (map[string]int, error) {
-	stats := make(map[string]int)
-	query := `SELECT processed, COUNT(*) FROM messages GROUP BY processed`
-	rows, err := r.db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var processed bool
-		var count int
-		if err := rows.Scan(&processed, &count); err != nil {
-			return nil, err
-		}
-		if processed {
-			stats["processed"] = count
-		} else {
-			stats["unprocessed"] = count
-		}
-	}
-
-	return stats, nil
+func (r *PostgresMessageRepository) GetProcessedCount(ctx context.Context) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages WHERE processed = TRUE").Scan(&count)
+	return count, err
 }
