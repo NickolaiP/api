@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"time"
 
 	"github.com/NickolaiP/api/config"
 	"github.com/NickolaiP/api/dbinit"
 	"github.com/NickolaiP/api/handlers"
-	"github.com/NickolaiP/api/kafka"
+	"github.com/NickolaiP/api/repository"
 
 	"github.com/IBM/sarama"
 	"github.com/gorilla/mux"
@@ -27,7 +31,6 @@ func main() {
 	}
 	defer db.Close()
 
-	// Инициализация базы данных
 	if err := dbinit.InitDB(db, "./scripts/init.sql"); err != nil {
 		log.Fatalf("failed to initialize database: %v", err)
 	}
@@ -38,14 +41,44 @@ func main() {
 	}
 	defer kafkaProducer.Close()
 
-	go kafka.StartConsumer(db, conf.KafkaBrokers)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	messageRepo := repository.NewMessageRepository(db)
+	messageHandler := handlers.NewMessageHandler(messageRepo, kafkaProducer)
 
 	router := mux.NewRouter()
-	router.HandleFunc("/messages", handlers.CreateMessageHandler(db, kafkaProducer)).Methods("POST")
-	router.HandleFunc("/stats", handlers.GetStatsHandler(db)).Methods("GET")
+	router.HandleFunc("/messages", messageHandler.CreateMessage).Methods("POST")
+	router.HandleFunc("/stats", messageHandler.GetStats).Methods("GET")
+	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "./static/index.html")
+	})
+
+	srv := &http.Server{
+		Addr:    ":8080",
+		Handler: router,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("failed to start server: %v", err)
+		}
+	}()
 
 	log.Println("Server is running on port 8080")
-	if err := http.ListenAndServe(":8080", router); err != nil {
-		log.Fatalf("failed to start server: %v", err)
+
+	<-ctx.Done()
+
+	stop()
+	log.Println("Shutting down gracefully, press Ctrl+C again to force")
+
+	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctxShutDown); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
+
+	log.Println("Server exiting")
 }
